@@ -1,0 +1,410 @@
+#lang dssl2
+'''
+let tp = TripPlanner([[0, 0, 1.5, 0],[1.5, 0, 2.5, 0],[2.5, 0, 3, 0]],[[1.5, 0, 'bank', 'Union'],[3, 0, 'barber', 'Tony']])
+tp.plan_route(0, 0, 'Judy')
+
+let tp = TripPlanner([[-1.1, -1.1, 0, 0],[0, 0, 3, 0],[3, 0, 3, 3],[3, 3, 3, 4],[0, 0, 3, 4]],[[0, 0, 'food', 'Sandwiches'],[3, 0, 'bank', 'Union'],[3, 3, 'barber', 'Judy'],[3, 4, 'barber', 'Tony']])
+tp.plan_route(-1.1, -1.1, 'Tony')
+
+let tp = TripPlanner([[0, 0, 0, 1],[0, 1, 3, 0],[0, 1, 4, 0],[0, 1, 5, 0],[0, 1, 6, 0],[0, 0, 1, 1],[1, 1, 3, 0],[1, 1, 4, 0],[1, 1, 5, 0],[1, 1, 6, 0],[0, 0, 2, 1],[2, 1, 3, 0],[2, 1, 4, 0],[2, 1, 5, 0],[2, 1, 6, 0]],[[0, 0, 'blacksmith', "Revere's Silver Shop"],[6, 0, 'church', 'Old North Church']])
+
+let tp = TripPlanner([[0, 0, 1.5, 0],[1.5, 0, 2.5, 0],[2.5, 0, 3, 0],[4, 0, 5, 0]],[[1.5, 0, 'bank', 'Union'],[3, 0, 'barber', 'Tony'],[4, 0, 'food', 'Jollibee'],[5, 0, 'barber', 'Judy']])
+tp.find_nearby(0, 0, 'food', 1)
+
+let tp = TripPlanner([[0, 0, 1.5, 0],[1.5, 0, 2.5, 0],[2.5, 0, 3, 0],[4, 0, 5, 0],[3, 0, 4, 0]],[[1.5, 0, 'bank', 'Union'],[3, 0, 'barber', 'Tony'],[5, 0, 'food', 'Jollibee'],[5, 0, 'barber', 'Judy'],[5, 0, 'bar', 'Pasta']])
+tp.find_nearby(0, 0, 'barber', 2)
+'''
+# Final project: Trip Planner
+let eight_principles = ["Know your rights.",
+"Acknowledge your sources.",
+"Protect your work.",
+"Avoid suspicion.",
+"Do your own work.",
+"Never falsify a record or permit another person to do so.",
+"Never fabricate data, citations, or experimental results.",
+"Always tell the truth when discussing your work with your instructor."]
+import cons
+import sbox_hash
+import 'project-lib/dictionaries.rkt'
+import 'project-lib/graph.rkt'
+import 'project-lib/binheap.rkt'
+
+
+### Basic Types ###
+
+#  - Latitudes and longitudes are numbers:
+let Lat?  = num?
+let Lon?  = num?
+
+#  - Point-of-interest categories and names are strings:
+let Cat?  = str?
+let Name? = str?
+
+### Raw Entity Types ###
+
+#  - Raw positions are 2-element vectors with a latitude and a longitude
+let RawPos? = TupC[Lat?, Lon?]
+
+#  - Raw road segments are 4-element vectors with the latitude and
+#    longitude of their first endpoint, then the latitude and longitude
+#    of their second endpoint
+let RawSeg? = TupC[Lat?, Lon?, Lat?, Lon?]
+
+#  - Raw points-of-interest are 4-element vectors with a latitude, a
+#    longitude, a point-of-interest category, and a name
+let RawPOI? = TupC[Lat?, Lon?, Cat?, Name?]
+
+### Contract Helpers ###
+
+# ListC[T] is a list of `T`s (linear time):
+let ListC = Cons.ListC
+# List of unspecified element type (constant time):
+let List? = Cons.list?
+
+
+interface TRIP_PLANNER:
+
+    # Returns the positions of all the points-of-interest that belong to
+    # the given category.
+    def locate_all(
+            self,
+            dst_cat:  Cat?           # point-of-interest category
+        )   ->        ListC[RawPos?] # positions of the POIs
+
+    # Returns the shortest route, if any, from the given source position
+    # to the point-of-interest with the given name.
+    def plan_route(
+            self,
+            src_lat:  Lat?,          # starting latitude
+            src_lon:  Lon?,          # starting longitude
+            dst_name: Name?          # name of goal
+        )   ->        ListC[RawPos?] # path to goal
+
+    # Finds no more than `n` points-of-interest of the given category
+    # nearest to the source position.
+    def find_nearby(
+            self,
+            src_lat:  Lat?,          # starting latitude
+            src_lon:  Lon?,          # starting longitude
+            dst_cat:  Cat?,          # point-of-interest category
+            n:        nat?           # maximum number of results
+        )   ->        ListC[RawPOI?] # list of nearby POIs
+
+struct position:
+   let latitude
+   let longitude
+   
+   
+struct road_segment:
+    let pos1 # pos struct
+    let pos2
+    let distance
+    
+struct poi:
+    let x 
+    let y
+    let category
+    let name
+    
+        
+## DISTANCE FORMULA WITH 2 poses--> let distance = (((pos2.latitude - pos1.latitude)**2) + ((pos2.longitude - pos1.longitude)**2))**(1/2)
+
+def dist(x1,y1,x2,y2):
+    return (((x2 - x1)**2) + ((y2 - y1)**2))**(1/2)     
+
+    
+def dijkstra(graph, start):
+    let dist = [inf; graph.len()]
+    let pred = [None; graph.len()]
+    
+    '''
+    for i in range(dist.len()):
+        dist[i] = inf
+        pred[i] = None
+    '''
+    dist[start] = 0    
+    
+    def distance(node1, node2):
+        if dist[node1] < dist[node2]:
+            return True
+        return False
+        
+    let todo = BinHeap(graph.len(), distance)
+    let done = [False; graph.len()]
+    todo.insert(start)
+    
+    while todo.len() is not 0:
+        let v = todo.find_min()
+        todo.remove_min()
+        
+        if done[v] is False:
+            done[v] = True
+            let adj = graph.get_adjacent(v)
+            while adj is not None:
+                if dist[v] + graph.get_edge(v,adj.data) < dist[adj.data]:
+                    dist[adj.data] = dist[v] + graph.get_edge(v,adj.data)
+                    pred[adj.data] = v
+                    
+                    todo.insert(adj.data)
+                adj = adj.next
+        
+    return [dist, pred]    
+    
+   
+    
+            
+          
+
+class TripPlanner (TRIP_PLANNER):
+    let road_list
+    let poi_list
+    let xy_to_node_id
+    let node_id_to_xy
+    let node_id_to_poi
+    let xy_graph
+    let name_to_poi
+    let locate_all_table
+    
+ 
+    
+    
+    def __init__(self, road_list, poi_list):
+        self.road_list = road_list
+        self.poi_list = poi_list
+        self.xy_to_node_id = HashTable(2*(self.road_list.len()), make_sbox_hash())
+        self.node_id_to_xy = [None; 2*(self.road_list.len())]
+        self.xy_graph = WuGraph(2*(self.road_list.len()))
+        self.name_to_poi = HashTable(self.poi_list.len(), make_sbox_hash())
+        self.node_id_to_poi = [None; 2*(self.road_list.len())]
+        self.locate_all_table =  HashTable(self.poi_list.len(), make_sbox_hash())
+        
+        
+            
+            
+        let i = 0
+        for paths in self.road_list:              
+            
+            if not self.xy_to_node_id.mem?([paths[0] , paths[1]]):
+             
+                self.xy_to_node_id.put([paths[0] , paths[1]], i)
+                self.node_id_to_xy[i] = [paths[0] , paths[1]]             
+                i = i + 1
+             
+            if not self.xy_to_node_id.mem?([paths[2] , paths[3]]):
+                
+                self.xy_to_node_id.put([paths[2] , paths[3]], i)
+                self.node_id_to_xy[i] = [paths[2] , paths[3]]
+             
+                i = i + 1
+          
+                
+        for paths in self.road_list:
+            #let distance = (((paths[2] - paths[0])**2) + ((paths[3] - paths[0])**2))**(1/2) 
+            let distance = dist(paths[0],paths[1],paths[2],paths[3])
+            self.xy_graph.set_edge(self.xy_to_node_id.get([paths[0],paths[1]]), self.xy_to_node_id.get([paths[2],paths[3]]), distance)
+                    
+        
+            
+        for pois in self.poi_list:
+            let name = pois[3]
+            let p = poi(pois[0],pois[1],pois[2],pois[3])
+            self.name_to_poi.put(name, p)
+
+            let xy = [pois[0],pois[1]]
+            
+            self.node_id_to_poi[self.xy_to_node_id.get(xy)] = cons(p, self.node_id_to_poi[self.xy_to_node_id.get(xy)])
+
+            
+            
+            
+    
+            
+    def show(self):
+        return [self.xy_to_node_id, self.node_id_to_xy, self.xy_graph, self.name_to_poi ] 
+      
+    def locate_all(self, category):
+          
+        let found_list = None
+        for poi in self.poi_list:
+            if poi[2] == category:
+                if not self.locate_all_table.mem?([poi[0],poi[1]]):
+                    self.locate_all_table.put([poi[0],poi[1]],"placeholder")
+                    #maybe add a hash table with xy pairs to see if its already in the found list
+                
+                    found_list = cons([poi[0],  poi[1]], found_list)
+        return found_list
+    
+  
+        
+
+    
+    
+    
+    
+    
+    def plan_route(self, start_lat, start_lon, destination):
+        
+        let route = []
+        let start = self.xy_to_node_id.get([start_lat , start_lon])
+        
+        
+        let results = dijkstra(self.xy_graph, start)
+        
+        let preds = results[1]
+        
+     
+        
+        if not self.name_to_poi.mem?(destination):
+            return None
+            
+        let dest = self.name_to_poi.get(destination)
+        
+        let destination_id = self.xy_to_node_id.get([dest.x, dest.y])
+        
+        
+        let xy_path = None
+      
+        xy_path = cons(self.node_id_to_xy[destination_id],xy_path) # add destination to the xy path
+        
+        let x = preds[destination_id]
+        
+        if destination_id == start:
+            return xy_path
+        
+       
+        if x == None: # no path found, return destination
+            return None
+        
+        if x == start:
+            xy_path = cons(self.node_id_to_xy[x],xy_path)
+        
+        while x is not start:
+            
+            xy_path = cons(self.node_id_to_xy[x],xy_path)
+            x = preds[x]            
+            if x == start: # if x = start, this means we got to the start, so add this to the linked list before returning xy_path
+                xy_path = cons(self.node_id_to_xy[x],xy_path)
+
+        
+        return xy_path
+
+            
+       
+
+        
+       
+       #i can only run each query once??
+      
+       
+        
+    def find_nearby(self, start_lat, start_lon, category, n_steps):
+        
+        let all = self.locate_all(category)
+        
+
+        let num = 0
+        let yes = all
+        while yes is not None:   #COUNTS A LINKED LIST??
+            num = num + 1
+            yes = yes.next
+        
+        let result =  dijkstra(self.xy_graph, self.xy_to_node_id.get([start_lat, start_lon]))
+        let dist = result[0]
+        let node_and_len = [None;num]
+        
+        let i = 0
+        while all is not None:
+            let node_id = self.xy_to_node_id.get(all.data)
+            node_and_len[i] = [node_id, dist[node_id]]
+            i = i + 1
+            all = all.next
+            
+        heap_sort(node_and_len, λ x, y: x[1] < y[1])
+
+      
+        
+        let p = None
+        let sorted = None
+        
+        let j = 0                #2
+        let index = 0
+        
+        while j < n_steps:
+            if index >= node_and_len.len():
+                return sorted
+            
+            if node_and_len[index][1] != inf:   
+                let poi_list = self.node_id_to_poi[node_and_len[index][0]]
+                
+                while poi_list is not None:
+                    
+                    if poi_list.data.category == category:    
+                        p = poi_list.data
+                        sorted = cons([p.x, p.y,p.category,p.name],sorted)
+                        j = j + 1
+                    if j == n_steps:
+                        return sorted
+                    poi_list = poi_list.next
+            
+            index = index + 1
+
+            
+        return sorted
+        
+        #NOT RETURNING IN RIGHT ORDER???????
+    
+#### ^^^ YOUR CODE HERE
+
+let t = TripPlanner([[0,0, 0,1],[0,0,1,0],[1,0,1,1],[0,1,0,2],[0,1,1,1],[1,1,1,2],[0,2,1,2],[1,2,1,3],[1,3,-0.2,3.3],[10,1,3,3]],[[0,0, "food", "Sandwiches"],[0,1, "food", "Pasta"],[1,1, "bank", "Local Credit Union"],[1,3,"bar","Bar None"],[1,3,"bar","H Bar"],[-0.2,3.3,"food","Burritos"],[10,1,"pool","Piscine"]])
+
+def my_first_example():
+    return TripPlanner([[0,0, 0,1], [0,0, 1,0]],
+                       [[0,0, "bar", "The Empty Bottle"],
+                        [0,1, "food", "Pelmeni"]])
+
+test 'My first locate_all test':
+    assert my_first_example().locate_all("food") == \
+        cons([0,1], None)
+
+test 'My first plan_route test':
+   assert my_first_example().plan_route(0, 0, "Pelmeni") == \
+       cons([0,0], cons([0,1], None))
+
+test 'My first find_nearby test':
+    assert my_first_example().find_nearby(0, 0, "food", 1) == \
+        cons([0,1, "food", "Pelmeni"], None)
+
+test "broken":
+    assert t.locate_all("barber") == None
+    assert t.plan_route(0,0,"Sushi") == None
+    assert t.plan_route(0,0,"Piscine") == None
+    assert t.find_nearby(0,0, "Circus", 1) == None
+    
+#test "workpls":
+    #assert t.find_nearby(0,0, "food", 1) == cons([0, 0, 'food', 'Sandwiches'], None)
+test "two":
+    assert t.find_nearby(0,0, "food", 2) == cons([0, 1, 'food', 'Pasta'], cons([0, 0, 'food', 'Sandwiches'], None))
+        
+def example_from_handout():
+    
+    pass
+#### ^^^ YOUR CODE HERE
+
+
+
+
+'''
+if sorted is None:                
+   sorted = cons([p.x, p.y,p.category,p.name],None)                
+# this is the head
+                
+                
+               
+            
+   else:
+       let temp = sorted
+       while temp.next is not None:
+           temp = temp.next
+       temp.next = cons([p.x, p.y,p.category,p.name],None)
+       #adds to end of linked list 
+'''
